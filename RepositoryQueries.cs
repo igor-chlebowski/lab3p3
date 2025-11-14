@@ -7,11 +7,11 @@ public static class RepositoryQueries
 {
     public static void RunQueries(this Repository repository)
     {
-        //repository.CommitWithHighestTotalLinesChanged();
+        repository.CommitWithHighestTotalLinesChanged();
         repository.AverageNumberOfFilesPerCommitByAuthor();
-        //repository.AuthorWithTheMostCommits();
-        //repository.TheFirstCommitForEachFile();
-        //repository.FilesWithMostContributors();
+        repository.AuthorWithTheMostCommits();
+        repository.TheFirstCommitForEachFile();
+        repository.FilesWithMostContributors();
     }
     /// <summary>
     /// Finds the single commit with the highest number of lines changed (added + deleted).
@@ -172,10 +172,34 @@ public static class RepositoryQueries
         var commits = repository.Commits.ToList();
         var authors = repository.Authors.Values.ToList();
 
-        var queryResult = new object();
+        var firstCommitsPerFile = commits
+            // flatten file changes with their commit
+            .SelectMany(c => (c.Changes ?? Enumerable.Empty<FileChange>())
+                .Select(ch => new { ch.Path, Commit = c }))
+            // group by path
+            .GroupBy(x => x.Path)
+            .Select(g =>
+            {
+                // pick earliest commit (by timestamp, then by hash for determinism)
+                var first = g
+                    .OrderBy(x => x.Commit.Timestamp)
+                    .ThenBy(x => x.Commit.Hash)
+                    .First().Commit;
+
+                return new
+                {
+                    Path = g.Key,
+                    FirstCommitHash = first.Hash,
+                    Timestamp = first.Timestamp,
+                    AuthorName = repository.Authors.GetValueOrDefault(first.AuthorId)?.Name ?? first.AuthorId,
+                    Message = first.Message
+                };
+            })
+            .OrderBy(x => x.Path)
+            .ToList();
 
         Console.WriteLine("The First Commit For Each File:");
-        DisplayQueryResult(queryResult);
+        DisplayQueryResult(firstCommitsPerFile);
         Console.WriteLine();
     }
 
@@ -192,10 +216,38 @@ public static class RepositoryQueries
         var commits = repository.Commits.ToList();
         var authors = repository.Authors.Values.ToList();
 
-        var queryResult = new object();
+        var authorsByPath = commits
+           // flatten path -> authorId pairs
+           .SelectMany(c => (c.Changes ?? Enumerable.Empty<FileChange>())
+               .Select(ch => new { ch.Path, c.AuthorId }))
+           .GroupBy(x => x.Path)
+           .Select(g =>
+           {
+               var distinctAuthorIds = g.Select(x => x.AuthorId).Distinct().ToList();
+               var authorNames = distinctAuthorIds
+                   .Select(id => repository.Authors.GetValueOrDefault(id)?.Name ?? id)
+                   .OrderBy(n => n)
+                   .ToList();
+
+               return new
+               {
+                   Path = g.Key,
+                   DistinctAuthorsCount = distinctAuthorIds.Count,
+                   Authors = authorNames
+               };
+           })
+           .ToList();
+
+        // find max distinct authors count
+        var maxContributors = authorsByPath.Count == 0 ? 0 : authorsByPath.Max(x => x.DistinctAuthorsCount);
+
+        var result = authorsByPath
+            .Where(x => x.DistinctAuthorsCount == maxContributors && maxContributors > 0)
+            .OrderBy(x => x.Path)
+            .ToList();
 
         Console.WriteLine("Files With Most Contributors:");
-        DisplayQueryResult(queryResult);
+        DisplayQueryResult(result);
         Console.WriteLine();
     }
 
